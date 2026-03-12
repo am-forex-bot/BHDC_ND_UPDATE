@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """
-Fix Word templates (.dotx/.zip) to use NetDocuments instead of WorkSite/FileSite.
+Fix Word templates (.dotx) to use NetDocuments instead of WorkSite/FileSite.
 
 This script patches the BigHand/Iphelion Outline DMS integration in
-customXml/item2.xml inside Word template zip files.
+customXml/item2.xml inside Word template files.
+
+Works DIRECTLY on .dotx files - no need to extract or re-zip manually.
+(A .dotx is just a zip file with a different extension.)
 
 Changes made:
-  1. DMS question: WorkSite.dll -> NetDocuments.dll, SelectWorkSpaceViewModel -> SelectWorkspaceViewModel
-  2. Save command: "Save to WorkSite" -> "Save to NetDocuments", WorkSite.SaveToDmsCommand -> NetDocuments.Commands.SaveToDmsCommand
+  1. DMS question: WorkSite.dll -> NetDocuments.dll
+  2. Save command: "Save to WorkSite" -> "Save to NetDocuments"
   3. Update Author command: "Update WorkSite author" -> "Update NetDocuments author"
   4. Adds missing NetDocuments-specific Save parameters (checkForDocId, documentId, version)
 
 Usage:
   python fix_worksite_to_netdocs.py <file_or_directory>
 
-  If given a directory, processes all .zip files in it.
-  If given a file, processes just that file.
+  If given a directory, processes all .dotx files in it.
+  If given a single .dotx file, processes just that file.
 
   Creates backups with .bak suffix before modifying.
 """
@@ -65,7 +68,6 @@ def fix_item2_xml(content):
 
     # 4. Add extra Save command parameters if missing
     if 'checkForDocId' not in content:
-        # Find the Save command's titleField parameter and insert after it
         save_match = re.search(r'(<command id="1311b0ba.*?</command>)', content, re.DOTALL)
         if save_match:
             old_save = save_match.group()
@@ -81,7 +83,6 @@ def fix_item2_xml(content):
     # Catch any remaining WorkSite references we might have missed
     remaining = re.findall(r'Iphelion\.Outline\.Integration\.WorkSite', content)
     if remaining:
-        # Generic fallback: replace any remaining WorkSite assembly references
         content = content.replace(
             'Iphelion.Outline.Integration.WorkSite',
             'Iphelion.Outline.Integration.NetDocuments'
@@ -93,14 +94,14 @@ def fix_item2_xml(content):
     return content, changes
 
 
-def process_zip(zip_path):
-    """Process a single zip file. Returns True if changes were made."""
-    print(f"\nProcessing: {zip_path}")
+def process_file(file_path):
+    """Process a single .dotx (or .zip) file. Returns True if changes were made."""
+    print(f"\nProcessing: {os.path.basename(file_path)}")
 
     # Find item2.xml in the zip
     try:
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            item2_entries = [n for n in zf.namelist() if n.endswith('customXml/item2.xml')]
+        with zipfile.ZipFile(file_path, 'r') as zf:
+            item2_entries = [n for n in zf.namelist() if 'customXml/item2.xml' in n]
             if not item2_entries:
                 print("  SKIP: No customXml/item2.xml found")
                 return False
@@ -108,7 +109,7 @@ def process_zip(zip_path):
             item2_name = item2_entries[0]
             raw = zf.read(item2_name)
     except (zipfile.BadZipFile, Exception) as e:
-        print(f"  ERROR: Cannot read zip: {e}")
+        print(f"  ERROR: Cannot read file: {e}")
         return False
 
     # Decode UTF-16
@@ -138,28 +139,26 @@ def process_zip(zip_path):
         return False
 
     # Create backup
-    backup_path = zip_path + '.bak'
+    backup_path = file_path + '.bak'
     if not os.path.exists(backup_path):
-        shutil.copy2(zip_path, backup_path)
-        print(f"  Backup: {backup_path}")
+        shutil.copy2(file_path, backup_path)
+        print(f"  Backup: {os.path.basename(backup_path)}")
 
-    # Repackage zip with the fixed item2.xml
-    with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+    # Repackage: read original zip, replace just item2.xml, write back
+    with tempfile.NamedTemporaryFile(suffix=os.path.splitext(file_path)[1], delete=False) as tmp:
         tmp_path = tmp.name
 
     try:
-        with zipfile.ZipFile(zip_path, 'r') as zf_in:
+        with zipfile.ZipFile(file_path, 'r') as zf_in:
             with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf_out:
                 for item in zf_in.infolist():
                     if item.filename == item2_name:
-                        # Write fixed content
                         fixed_bytes = b'\xff\xfe' + fixed_content.encode('utf-16-le')
                         zf_out.writestr(item, fixed_bytes)
                     else:
                         zf_out.writestr(item, zf_in.read(item.filename))
 
-        # Replace original with fixed version
-        shutil.move(tmp_path, zip_path)
+        shutil.move(tmp_path, file_path)
     except Exception as e:
         print(f"  ERROR: Failed to repackage: {e}")
         if os.path.exists(tmp_path):
@@ -171,7 +170,7 @@ def process_zip(zip_path):
         print(f"  FIXED: {change}")
 
     # Verify
-    with zipfile.ZipFile(zip_path, 'r') as zf:
+    with zipfile.ZipFile(file_path, 'r') as zf:
         data = zf.read(item2_name)
         text = data.decode('utf-16-le', errors='replace')
         ws_count = len(re.findall(r'WorkSite', text))
@@ -192,22 +191,22 @@ def main():
     total_count = 0
 
     if os.path.isdir(target):
-        # Process all .zip files in directory
-        zip_files = sorted([
+        # Process all .dotx files in directory
+        files = sorted([
             os.path.join(target, f) for f in os.listdir(target)
-            if f.endswith('.zip') and not f.endswith('.bak.zip')
+            if f.endswith('.dotx') and not f.endswith('.bak.dotx')
         ])
-        if not zip_files:
-            print(f"No .zip files found in {target}")
+        if not files:
+            print(f"No .dotx files found in {target}")
             sys.exit(1)
-        print(f"Found {len(zip_files)} zip file(s) in {target}")
-        for zp in zip_files:
+        print(f"Found {len(files)} .dotx file(s) in {target}")
+        for fp in files:
             total_count += 1
-            if process_zip(zp):
+            if process_file(fp):
                 fixed_count += 1
     elif os.path.isfile(target):
         total_count = 1
-        if process_zip(target):
+        if process_file(target):
             fixed_count = 1
     else:
         print(f"Error: {target} not found")
