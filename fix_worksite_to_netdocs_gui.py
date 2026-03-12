@@ -41,9 +41,6 @@ EXTRA_SAVE_PARAMS = '''
         <parameter id="b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e" name="Document Id" type="Iphelion.Outline.Model.Entities.ParameterFieldDescriptor, Iphelion.Outline.Model, Version=2.6.0.60, Culture=neutral, PublicKeyToken=null" order="999" key="documentId" value="b6f60e59-6c84-4d5f-8fb2-e4aaf9426131|4391e415-b6c6-4380-b620-00144a66365b" groupOrder="-1" isGenerated="false"/>
         <parameter id="c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f" name="Version" type="Iphelion.Outline.Model.Entities.ParameterFieldDescriptor, Iphelion.Outline.Model, Version=2.6.0.60, Culture=neutral, PublicKeyToken=null" order="999" key="documentVersion" value="b6f60e59-6c84-4d5f-8fb2-e4aaf9426131|014ff85a-b1de-4839-8ed8-7d8d79cdd820" groupOrder="-1" isGenerated="false"/>'''
 
-# The DMS question ID (same across all Wallace templates)
-DMS_QUESTION_ID = "b6f60e59-6c84-4d5f-8fb2-e4aaf9426131"
-
 # The correct NetDocuments field IDs, keyed by field name.
 # These come from the known-working Letter.dotx template.
 NETDOCS_FIELD_IDS = {
@@ -119,22 +116,41 @@ def get_current_doctype(content):
     return m.group(1) if m else ""
 
 
+def find_dms_question_id(content):
+    """Find the DMS question's ID dynamically. Each template can have a different one."""
+    m = re.search(
+        r'<question\s[^>]*id="([^"]*)"[^>]*assembly="Iphelion\.Outline\.Integration\.'
+        r'(?:NetDocuments|WorkSite)\.dll"',
+        content
+    )
+    if m:
+        return m.group(1)
+    m = re.search(r'<question\s[^>]*id="([^"]*)"[^>]*name="DMS"', content)
+    return m.group(1) if m else None
+
+
 def auto_detect_field_replacements(content):
     """Scan the template for DMS-related <field> elements and build a replacement
     map for any that don't match the known-good NetDocuments IDs.
+    Dynamically finds the DMS question ID (varies per template).
     """
-    replacements = {}
-    # Match fields belonging to the DMS question (either attribute order)
-    pattern = r'<field\s+id="([^"]*)"[^>]*name="([^"]*)"[^>]*entityId="' + re.escape(DMS_QUESTION_ID) + r'"'
-    for m in re.finditer(pattern, content):
-        field_id, field_name = m.group(1), m.group(2)
-        correct_id = NETDOCS_FIELD_IDS.get(field_name)
-        if correct_id and field_id != correct_id:
-            replacements[field_id] = correct_id
+    dms_id = find_dms_question_id(content)
+    if not dms_id:
+        return {}
 
-    pattern2 = r'<field\s+id="([^"]*)"[^>]*entityId="' + re.escape(DMS_QUESTION_ID) + r'"[^>]*name="([^"]*)"'
-    for m in re.finditer(pattern2, content):
-        field_id, field_name = m.group(1), m.group(2)
+    replacements = {}
+    for m in re.finditer(r'<field\s+id="([^"]*)"[^>]*/?\s*>', content):
+        tag = m.group()
+        eid_match = re.search(r'entityId="([^"]*)"', tag)
+        if not eid_match or eid_match.group(1) != dms_id:
+            continue
+
+        field_id = re.search(r'id="([^"]*)"', tag).group(1)
+        name_match = re.search(r'name="([^"]*)"', tag)
+        if not name_match:
+            continue
+
+        field_name = name_match.group(1)
         correct_id = NETDOCS_FIELD_IDS.get(field_name)
         if correct_id and field_id != correct_id:
             replacements[field_id] = correct_id
