@@ -8,6 +8,10 @@ Opens a tkinter window where you can:
   - Choose the correct NetDocuments docType for each (LET, INV, DOC, etc.)
   - Apply all fixes with one click
 
+Auto-detects wrong DMS field IDs by comparing field names against the
+known-good NetDocuments reference. Works regardless of which customXml
+item contains the BigHand config.
+
 Creates backups with .bak suffix before modifying.
 """
 
@@ -30,30 +34,35 @@ DOCTYPE_SUGGESTIONS = {
 # Common NetDocuments docType codes the user can pick from
 DOCTYPE_OPTIONS = ["LET", "INV", "DOC", "MEM", "FAX", "EML", "RPT", "AGR", ""]
 
-# --- DMS fix constants (same as CLI script) ---
+# --- DMS fix constants ---
 
 EXTRA_SAVE_PARAMS = '''
         <parameter id="a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d" name="Check for Doc Id" type="System.Boolean, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" order="999" key="checkForDocId" value="True" groupOrder="-1" isGenerated="false"/>
         <parameter id="b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e" name="Document Id" type="Iphelion.Outline.Model.Entities.ParameterFieldDescriptor, Iphelion.Outline.Model, Version=2.6.0.60, Culture=neutral, PublicKeyToken=null" order="999" key="documentId" value="b6f60e59-6c84-4d5f-8fb2-e4aaf9426131|4391e415-b6c6-4380-b620-00144a66365b" groupOrder="-1" isGenerated="false"/>
         <parameter id="c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f" name="Version" type="Iphelion.Outline.Model.Entities.ParameterFieldDescriptor, Iphelion.Outline.Model, Version=2.6.0.60, Culture=neutral, PublicKeyToken=null" order="999" key="documentVersion" value="b6f60e59-6c84-4d5f-8fb2-e4aaf9426131|014ff85a-b1de-4839-8ed8-7d8d79cdd820" groupOrder="-1" isGenerated="false"/>'''
 
-FIELD_ID_REPLACEMENTS = {
-    "af020c1a-f826-494c-bbaa-2100b39770a7": "ab5b4913-b64e-41e6-9bee-f1c7e7c8ba41",  # Client
-    "d1a0c03d-0258-47ac-bb6d-458a78e56474": "152eda4c-2831-40ac-9162-c15059d65622",  # ClientName
-    "9016353d-0ab3-451f-9828-3fee96cf68ba": "6f228f23-540f-4466-ba40-14327c3f0f84",  # Connected
-    "2403d342-533b-45e7-84b2-62d681290485": "c0adb0a3-a528-49ea-ae35-041d6e4fff29",  # Create new version
-    "d8d8a1b7-29f2-4184-b4bb-94e86811b1dc": "c209e536-a107-40f1-bfc4-80610f2ec53b",  # DocFolderId
-    "72904a47-5780-459c-be7a-448f9ad8d6b4": "cae65a0c-9dba-4e06-868e-6fc5fd082911",  # DocIdFormat
-    "a1f231ea-a00f-4606-9fab-d2acd859d3ad": "4391e415-b6c6-4380-b620-00144a66365b",  # DocNumber
-    "7abea0f8-46b7-4968-bb12-04a899f0d778": "f3821f3f-25f3-4793-b379-59f1f861a1b1",  # DocSubType
-    "64ff0036-a6af-4b11-a4ea-402a2f273e21": "891ae94e-e0d3-4126-acdb-04d9e07b21ec",  # DocType
-    "c9094b9c-52fd-4403-bb83-9bb3ab5368ad": "014ff85a-b1de-4839-8ed8-7d8d79cdd820",  # DocVersion
-    "2fef3f19-232d-4142-b525-11d8a76a6e9b": "b4605801-b53b-4334-8022-11fa556809a5",  # Library
-    "362ddceb-8fc2-4ead-b535-ed9e83598384": "ee374f24-04a1-482e-8118-b26f8f351cc2",  # Matter
-    "a3eef514-247f-4281-b6a2-3b4d34bc68cf": "6a059c3f-9fdb-485a-8240-638fea464980",  # MatterName
-    "01a5919e-9f80-47f4-93c4-a97878088c9c": "978f91f0-df54-498f-9e5c-abf7df96c941",  # Server
-    "a002e78a-8e18-4375-bef7-9f687e931f65": "3743e51b-251b-402c-9f20-d842f238463a",  # Title
-    "388a1e13-9978-4547-8c39-29b89a11d72a": "87d09b6b-2044-4360-b13c-604db59f9b12",  # WorkspaceId
+# The DMS question ID (same across all Wallace templates)
+DMS_QUESTION_ID = "b6f60e59-6c84-4d5f-8fb2-e4aaf9426131"
+
+# The correct NetDocuments field IDs, keyed by field name.
+# These come from the known-working Letter.dotx template.
+NETDOCS_FIELD_IDS = {
+    "Client":             "ab5b4913-b64e-41e6-9bee-f1c7e7c8ba41",
+    "ClientName":         "152eda4c-2831-40ac-9162-c15059d65622",
+    "Connected":          "6f228f23-540f-4466-ba40-14327c3f0f84",
+    "Create new version": "c0adb0a3-a528-49ea-ae35-041d6e4fff29",
+    "DocFolderId":        "c209e536-a107-40f1-bfc4-80610f2ec53b",
+    "DocIdFormat":        "cae65a0c-9dba-4e06-868e-6fc5fd082911",
+    "DocNumber":          "4391e415-b6c6-4380-b620-00144a66365b",
+    "DocSubType":         "f3821f3f-25f3-4793-b379-59f1f861a1b1",
+    "DocType":            "891ae94e-e0d3-4126-acdb-04d9e07b21ec",
+    "DocVersion":         "014ff85a-b1de-4839-8ed8-7d8d79cdd820",
+    "Library":            "b4605801-b53b-4334-8022-11fa556809a5",
+    "Matter":             "ee374f24-04a1-482e-8118-b26f8f351cc2",
+    "MatterName":         "6a059c3f-9fdb-485a-8240-638fea464980",
+    "Server":             "978f91f0-df54-498f-9e5c-abf7df96c941",
+    "Title":              "3743e51b-251b-402c-9f20-d842f238463a",
+    "WorkspaceId":        "87d09b6b-2044-4360-b13c-604db59f9b12",
 }
 
 
@@ -61,40 +70,86 @@ FIELD_ID_REPLACEMENTS = {
 # Core fix logic
 # ---------------------------------------------------------------------------
 
-def read_item2(file_path):
-    """Read and decode item2.xml from a .dotx. Returns (content_str, entry_name) or (None, None)."""
+def find_bighand_entry(zf):
+    """Find the customXml item that contains the BigHand/Outline config.
+    Returns (entry_name, raw_bytes) or (None, None).
+    """
+    candidates = sorted([n for n in zf.namelist() if re.match(r'customXml/item\d+\.xml$', n)])
+    for entry in candidates:
+        raw = zf.read(entry)
+        if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
+            try:
+                text = raw[2:].decode('utf-16-le' if raw[:2] == b'\xff\xfe' else 'utf-16-be')
+            except Exception:
+                continue
+            if '<template' in text[:200]:
+                return entry, raw
+        elif b'<template' in raw[:400]:
+            return entry, raw
+    return None, None
+
+
+def decode_content(raw):
+    """Decode raw bytes from a BigHand item XML to string."""
+    if raw[:2] == b'\xff\xfe':
+        return raw[2:].decode('utf-16-le')
+    elif raw[:2] == b'\xfe\xff':
+        return raw[2:].decode('utf-16-be')
+    else:
+        return raw.decode('utf-16-le', errors='replace')
+
+
+def read_bighand_config(file_path):
+    """Read and decode BigHand config from a .dotx.
+    Returns (content_str, entry_name) or (None, None).
+    """
     try:
         with zipfile.ZipFile(file_path, 'r') as zf:
-            entries = [n for n in zf.namelist() if 'customXml/item2.xml' in n]
-            if not entries:
+            entry_name, raw = find_bighand_entry(zf)
+            if entry_name is None:
                 return None, None
-            raw = zf.read(entries[0])
+            return decode_content(raw), entry_name
     except Exception:
         return None, None
 
-    if raw[:2] == b'\xff\xfe':
-        content = raw[2:].decode('utf-16-le')
-    elif raw[:2] == b'\xfe\xff':
-        content = raw[2:].decode('utf-16-be')
-    else:
-        content = raw.decode('utf-16-le', errors='replace')
-    return content, entries[0]
-
 
 def get_current_doctype(content):
-    """Extract the current docType value from item2.xml content."""
+    """Extract the current docType value from BigHand config content."""
     m = re.search(r'key="docType"\s+value="([^"]*)"', content)
     return m.group(1) if m else ""
 
 
+def auto_detect_field_replacements(content):
+    """Scan the template for DMS-related <field> elements and build a replacement
+    map for any that don't match the known-good NetDocuments IDs.
+    """
+    replacements = {}
+    # Match fields belonging to the DMS question (either attribute order)
+    pattern = r'<field\s+id="([^"]*)"[^>]*name="([^"]*)"[^>]*entityId="' + re.escape(DMS_QUESTION_ID) + r'"'
+    for m in re.finditer(pattern, content):
+        field_id, field_name = m.group(1), m.group(2)
+        correct_id = NETDOCS_FIELD_IDS.get(field_name)
+        if correct_id and field_id != correct_id:
+            replacements[field_id] = correct_id
+
+    pattern2 = r'<field\s+id="([^"]*)"[^>]*entityId="' + re.escape(DMS_QUESTION_ID) + r'"[^>]*name="([^"]*)"'
+    for m in re.finditer(pattern2, content):
+        field_id, field_name = m.group(1), m.group(2)
+        correct_id = NETDOCS_FIELD_IDS.get(field_name)
+        if correct_id and field_id != correct_id:
+            replacements[field_id] = correct_id
+
+    return replacements
+
+
 def needs_fixing(content):
-    """Check if this template still has WorkSite refs or old field IDs."""
+    """Check if this template still has WorkSite refs or wrong field IDs."""
     if 'WorkSite' in content:
         return True
-    return any(ws_id in content for ws_id in FIELD_ID_REPLACEMENTS)
+    return bool(auto_detect_field_replacements(content))
 
 
-def fix_item2_xml(content, new_doctype):
+def fix_item_xml(content, new_doctype):
     """Apply all WorkSite -> NetDocuments fixes, using the given docType value."""
     changes = []
     original = content
@@ -134,25 +189,28 @@ def fix_item2_xml(content, new_doctype):
                 content = content.replace(old_save, new_save)
                 changes.append("Added NetDocuments Save params")
 
-    # Field ID replacements
-    field_count = 0
-    for ws_id, nd_id in FIELD_ID_REPLACEMENTS.items():
-        count = content.count(ws_id)
-        if count > 0:
-            content = content.replace(ws_id, nd_id)
-            field_count += count
-    if field_count > 0:
-        changes.append(f"Replaced {field_count} field ID(s)")
+    # Auto-detect and replace wrong field IDs
+    field_replacements = auto_detect_field_replacements(content)
+    if field_replacements:
+        field_count = 0
+        for wrong_id, correct_id in field_replacements.items():
+            count = content.count(wrong_id)
+            if count > 0:
+                content = content.replace(wrong_id, correct_id)
+                field_count += count
+        if field_count > 0:
+            changes.append(f"Replaced {field_count} field ID ref(s) ({len(field_replacements)} fields)")
 
-    # docType - replace whatever the current value is with the user's choice
-    current = get_current_doctype(content)
-    if current != new_doctype and new_doctype:
-        content = re.sub(
-            r'(key="docType"\s+value=")[^"]*(")',
-            rf'\g<1>{new_doctype}\2',
-            content
-        )
-        changes.append(f"docType: '{current}' -> '{new_doctype}'")
+    # docType
+    if new_doctype:
+        current = get_current_doctype(content)
+        if current != new_doctype:
+            content = re.sub(
+                r'(key="docType"\s+value=")[^"]*(")',
+                rf'\g<1>{new_doctype}\2',
+                content
+            )
+            changes.append(f"docType: '{current}' -> '{new_doctype}'")
 
     # Enable Subject question if disabled
     old_subj = 'id="11904e11-bb39-4293-9339-71128b7bf8e7" name="Subject" assembly="Iphelion.Outline.Controls.dll" type="Iphelion.Outline.Controls.QuestionControls.ViewModels.ReferenceViewModel" order="5" active="false"'
@@ -177,11 +235,11 @@ def fix_item2_xml(content, new_doctype):
 
 def apply_fix(file_path, new_doctype):
     """Fix a single .dotx file. Returns (success, message)."""
-    content, entry_name = read_item2(file_path)
+    content, entry_name = read_bighand_config(file_path)
     if content is None:
-        return False, "No customXml/item2.xml found"
+        return False, "No BigHand config found in any customXml item"
 
-    fixed, changes = fix_item2_xml(content, new_doctype)
+    fixed, changes = fix_item_xml(content, new_doctype)
     if fixed is None:
         return False, "No changes needed"
 
@@ -216,30 +274,28 @@ def apply_fix(file_path, new_doctype):
 # ---------------------------------------------------------------------------
 
 class FileEntry:
-    """Represents one .dotx file found that needs fixing."""
+    """Represents one .dotx file found."""
     def __init__(self, path, current_doctype, needs_fix):
         self.path = path
         self.filename = os.path.basename(path)
         self.current_doctype = current_doctype
         self.needs_fix = needs_fix
-        # Suggest a NetDocuments docType based on the current value
         self.suggested = DOCTYPE_SUGGESTIONS.get(current_doctype, current_doctype)
 
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("WorkSite → NetDocuments Template Fixer")
+        self.title("WorkSite \u2192 NetDocuments Template Fixer")
         self.geometry("820x520")
         self.minsize(700, 400)
 
         self.file_entries = []
-        self.doctype_vars = {}  # path -> StringVar
+        self.doctype_vars = {}
 
         self._build_ui()
 
     def _build_ui(self):
-        # Top frame - file/folder picker
         top = ttk.Frame(self, padding=10)
         top.pack(fill=tk.X)
 
@@ -249,11 +305,9 @@ class App(tk.Tk):
         self.path_label = ttk.Label(top, text="No files loaded", foreground="grey")
         self.path_label.pack(side=tk.LEFT, padx=10)
 
-        # Middle frame - file list with docType selectors
         mid = ttk.Frame(self, padding=(10, 0, 10, 0))
         mid.pack(fill=tk.BOTH, expand=True)
 
-        # Column headers
         header = ttk.Frame(mid)
         header.pack(fill=tk.X, pady=(0, 2))
         ttk.Label(header, text="File", font=("", 9, "bold"), width=40, anchor=tk.W).pack(side=tk.LEFT)
@@ -261,7 +315,6 @@ class App(tk.Tk):
         ttk.Label(header, text="Current", font=("", 9, "bold"), width=10, anchor=tk.W).pack(side=tk.LEFT, padx=5)
         ttk.Label(header, text="New docType", font=("", 9, "bold"), width=12, anchor=tk.W).pack(side=tk.LEFT, padx=5)
 
-        # Scrollable list
         canvas_frame = ttk.Frame(mid)
         canvas_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -276,7 +329,6 @@ class App(tk.Tk):
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Bottom frame - apply button + log
         bot = ttk.Frame(self, padding=10)
         bot.pack(fill=tk.X)
 
@@ -307,7 +359,6 @@ class App(tk.Tk):
             self._load_files(paths)
 
     def _load_files(self, paths):
-        # Clear existing
         for w in self.scroll_frame.winfo_children():
             w.destroy()
         self.file_entries.clear()
@@ -315,7 +366,7 @@ class App(tk.Tk):
 
         fixable = 0
         for path in paths:
-            content, _ = read_item2(path)
+            content, _ = read_bighand_config(path)
             if content is None:
                 continue
 
@@ -327,20 +378,16 @@ class App(tk.Tk):
             row = ttk.Frame(self.scroll_frame)
             row.pack(fill=tk.X, pady=1)
 
-            # Filename
             ttk.Label(row, text=entry.filename, width=40, anchor=tk.W).pack(side=tk.LEFT)
 
-            # Status
             if fix_needed:
                 ttk.Label(row, text="Needs fixing", foreground="red", width=18, anchor=tk.W).pack(side=tk.LEFT, padx=5)
                 fixable += 1
             else:
                 ttk.Label(row, text="Already converted", foreground="green", width=18, anchor=tk.W).pack(side=tk.LEFT, padx=5)
 
-            # Current docType
             ttk.Label(row, text=current_dt or "(empty)", width=10, anchor=tk.W).pack(side=tk.LEFT, padx=5)
 
-            # New docType combo
             var = tk.StringVar(value=entry.suggested)
             self.doctype_vars[path] = var
             combo = ttk.Combobox(row, textvariable=var, values=DOCTYPE_OPTIONS, width=8, state="normal" if fix_needed else "disabled")
@@ -365,7 +412,6 @@ class App(tk.Tk):
             else:
                 errors.append(f"{entry.filename}: {msg}")
 
-        # Refresh the list
         paths = [e.path for e in self.file_entries]
         self._load_files(paths)
 

@@ -3,7 +3,7 @@
 Fix Word templates (.dotx) to use NetDocuments instead of WorkSite/FileSite.
 
 This script patches the BigHand/Iphelion Outline DMS integration in
-customXml/item2.xml inside Word template files.
+customXml/item*.xml inside Word template files.
 
 Works DIRECTLY on .dotx files - no need to extract or re-zip manually.
 (A .dotx is just a zip file with a different extension.)
@@ -13,9 +13,12 @@ Changes made:
   2. Save command: "Save to WorkSite" -> "Save to NetDocuments"
   3. Update Author command: "Update WorkSite author" -> "Update NetDocuments author"
   4. Adds missing NetDocuments-specific Save parameters (checkForDocId, documentId, version)
-  5. Replaces all 16 WorkSite DMS field IDs with NetDocuments equivalents
-     (Client, Matter, MatterName, DocIdFormat, DocNumber, DocVersion, etc.)
+  5. Auto-detects and replaces ALL wrong DMS field IDs by comparing field names
+     against the known-good NetDocuments reference IDs
   6. Fixes docType value and Subject question active state
+
+Note: The BigHand config can be in any customXml item (item1.xml, item2.xml, etc.)
+      depending on the template. The script checks all of them.
 
 Usage:
   python fix_worksite_to_netdocs.py <file_or_directory>
@@ -40,32 +43,66 @@ EXTRA_SAVE_PARAMS = '''
         <parameter id="b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e" name="Document Id" type="Iphelion.Outline.Model.Entities.ParameterFieldDescriptor, Iphelion.Outline.Model, Version=2.6.0.60, Culture=neutral, PublicKeyToken=null" order="999" key="documentId" value="b6f60e59-6c84-4d5f-8fb2-e4aaf9426131|4391e415-b6c6-4380-b620-00144a66365b" groupOrder="-1" isGenerated="false"/>
         <parameter id="c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f" name="Version" type="Iphelion.Outline.Model.Entities.ParameterFieldDescriptor, Iphelion.Outline.Model, Version=2.6.0.60, Culture=neutral, PublicKeyToken=null" order="999" key="documentVersion" value="b6f60e59-6c84-4d5f-8fb2-e4aaf9426131|014ff85a-b1de-4839-8ed8-7d8d79cdd820" groupOrder="-1" isGenerated="false"/>'''
 
-# WorkSite field ID -> NetDocuments field ID mapping
-# These are the GUIDs for DMS fields exposed by each integration DLL.
-# WorkSite and NetDocuments use completely different IDs for the same logical fields.
-FIELD_ID_REPLACEMENTS = {
-    # WorkSite ID                              NetDocuments ID                           Field Name
-    "af020c1a-f826-494c-bbaa-2100b39770a7": "ab5b4913-b64e-41e6-9bee-f1c7e7c8ba41",  # Client
-    "d1a0c03d-0258-47ac-bb6d-458a78e56474": "152eda4c-2831-40ac-9162-c15059d65622",  # ClientName
-    "9016353d-0ab3-451f-9828-3fee96cf68ba": "6f228f23-540f-4466-ba40-14327c3f0f84",  # Connected
-    "2403d342-533b-45e7-84b2-62d681290485": "c0adb0a3-a528-49ea-ae35-041d6e4fff29",  # Create new version
-    "d8d8a1b7-29f2-4184-b4bb-94e86811b1dc": "c209e536-a107-40f1-bfc4-80610f2ec53b",  # DocFolderId
-    "72904a47-5780-459c-be7a-448f9ad8d6b4": "cae65a0c-9dba-4e06-868e-6fc5fd082911",  # DocIdFormat
-    "a1f231ea-a00f-4606-9fab-d2acd859d3ad": "4391e415-b6c6-4380-b620-00144a66365b",  # DocNumber
-    "7abea0f8-46b7-4968-bb12-04a899f0d778": "f3821f3f-25f3-4793-b379-59f1f861a1b1",  # DocSubType
-    "64ff0036-a6af-4b11-a4ea-402a2f273e21": "891ae94e-e0d3-4126-acdb-04d9e07b21ec",  # DocType
-    "c9094b9c-52fd-4403-bb83-9bb3ab5368ad": "014ff85a-b1de-4839-8ed8-7d8d79cdd820",  # DocVersion
-    "2fef3f19-232d-4142-b525-11d8a76a6e9b": "b4605801-b53b-4334-8022-11fa556809a5",  # Library
-    "362ddceb-8fc2-4ead-b535-ed9e83598384": "ee374f24-04a1-482e-8118-b26f8f351cc2",  # Matter
-    "a3eef514-247f-4281-b6a2-3b4d34bc68cf": "6a059c3f-9fdb-485a-8240-638fea464980",  # MatterName
-    "01a5919e-9f80-47f4-93c4-a97878088c9c": "978f91f0-df54-498f-9e5c-abf7df96c941",  # Server
-    "a002e78a-8e18-4375-bef7-9f687e931f65": "3743e51b-251b-402c-9f20-d842f238463a",  # Title
-    "388a1e13-9978-4547-8c39-29b89a11d72a": "87d09b6b-2044-4360-b13c-604db59f9b12",  # WorkspaceId
+# The DMS question ID (same across all Wallace templates)
+DMS_QUESTION_ID = "b6f60e59-6c84-4d5f-8fb2-e4aaf9426131"
+
+# The correct NetDocuments field IDs, keyed by field name.
+# These come from the known-working Letter.dotx template.
+# Any field in a template with the same name but a different ID is a WorkSite
+# leftover that needs replacing.
+NETDOCS_FIELD_IDS = {
+    "Client":             "ab5b4913-b64e-41e6-9bee-f1c7e7c8ba41",
+    "ClientName":         "152eda4c-2831-40ac-9162-c15059d65622",
+    "Connected":          "6f228f23-540f-4466-ba40-14327c3f0f84",
+    "Create new version": "c0adb0a3-a528-49ea-ae35-041d6e4fff29",
+    "DocFolderId":        "c209e536-a107-40f1-bfc4-80610f2ec53b",
+    "DocIdFormat":        "cae65a0c-9dba-4e06-868e-6fc5fd082911",
+    "DocNumber":          "4391e415-b6c6-4380-b620-00144a66365b",
+    "DocSubType":         "f3821f3f-25f3-4793-b379-59f1f861a1b1",
+    "DocType":            "891ae94e-e0d3-4126-acdb-04d9e07b21ec",
+    "DocVersion":         "014ff85a-b1de-4839-8ed8-7d8d79cdd820",
+    "Library":            "b4605801-b53b-4334-8022-11fa556809a5",
+    "Matter":             "ee374f24-04a1-482e-8118-b26f8f351cc2",
+    "MatterName":         "6a059c3f-9fdb-485a-8240-638fea464980",
+    "Server":             "978f91f0-df54-498f-9e5c-abf7df96c941",
+    "Title":              "3743e51b-251b-402c-9f20-d842f238463a",
+    "WorkspaceId":        "87d09b6b-2044-4360-b13c-604db59f9b12",
 }
 
 
-def fix_item2_xml(content):
-    """Apply all WorkSite -> NetDocuments fixes to item2.xml content (string).
+def auto_detect_field_replacements(content):
+    """Scan the template for DMS-related <field> elements and build a replacement
+    map for any that don't match the known-good NetDocuments IDs.
+
+    Returns a dict of {wrong_id: correct_netdocs_id}.
+    """
+    replacements = {}
+
+    # Find all <field> elements that belong to the DMS question
+    for m in re.finditer(
+        r'<field\s+id="([^"]*)"[^>]*name="([^"]*)"[^>]*entityId="' + re.escape(DMS_QUESTION_ID) + r'"',
+        content
+    ):
+        field_id, field_name = m.group(1), m.group(2)
+        correct_id = NETDOCS_FIELD_IDS.get(field_name)
+        if correct_id and field_id != correct_id:
+            replacements[field_id] = correct_id
+
+    # Also check the alternate attribute order (entityId before name)
+    for m in re.finditer(
+        r'<field\s+id="([^"]*)"[^>]*entityId="' + re.escape(DMS_QUESTION_ID) + r'"[^>]*name="([^"]*)"',
+        content
+    ):
+        field_id, field_name = m.group(1), m.group(2)
+        correct_id = NETDOCS_FIELD_IDS.get(field_name)
+        if correct_id and field_id != correct_id:
+            replacements[field_id] = correct_id
+
+    return replacements
+
+
+def fix_item_xml(content, new_doctype=None):
+    """Apply all WorkSite -> NetDocuments fixes to a BigHand item XML content string.
     Returns (fixed_content, changes_made_list) or (None, []) if no changes needed.
     """
     changes = []
@@ -106,24 +143,33 @@ def fix_item2_xml(content):
                 content = content.replace(old_save, new_save)
                 changes.append("Added missing NetDocuments Save params (checkForDocId, documentId, version)")
 
-    # 5. Replace all WorkSite DMS field IDs with NetDocuments equivalents
-    field_count = 0
-    for ws_id, nd_id in FIELD_ID_REPLACEMENTS.items():
-        count = content.count(ws_id)
-        if count > 0:
-            content = content.replace(ws_id, nd_id)
-            field_count += count
-    if field_count > 0:
-        changes.append(f"Replaced {field_count} WorkSite DMS field ID reference(s) with NetDocuments equivalents")
+    # 5. Auto-detect and replace wrong DMS field IDs
+    field_replacements = auto_detect_field_replacements(content)
+    if field_replacements:
+        field_count = 0
+        for wrong_id, correct_id in field_replacements.items():
+            count = content.count(wrong_id)
+            if count > 0:
+                content = content.replace(wrong_id, correct_id)
+                field_count += count
+        if field_count > 0:
+            changes.append(f"Replaced {field_count} wrong DMS field ID reference(s) "
+                           f"({len(field_replacements)} unique fields) with NetDocuments equivalents")
 
-    # 6. Fix docType value (WorkSite uses "Letter", NetDocuments uses "LET")
-    if 'key="docType" value="Letter"' in content:
-        content = content.replace('key="docType" value="Letter"', 'key="docType" value="LET"')
-        changes.append("Fixed docType: 'Letter' -> 'LET'")
+    # 6. Fix docType value if a new value is specified
+    if new_doctype:
+        m = re.search(r'key="docType"\s+value="([^"]*)"', content)
+        if m and m.group(1) != new_doctype:
+            content = re.sub(
+                r'(key="docType"\s+value=")[^"]*(")',
+                rf'\g<1>{new_doctype}\2',
+                content
+            )
+            changes.append(f"docType: '{m.group(1)}' -> '{new_doctype}'")
 
     # 7. Enable Subject question if disabled
     old_subj = 'id="11904e11-bb39-4293-9339-71128b7bf8e7" name="Subject" assembly="Iphelion.Outline.Controls.dll" type="Iphelion.Outline.Controls.QuestionControls.ViewModels.ReferenceViewModel" order="5" active="false"'
-    new_subj = 'id="11904e11-bb39-4293-9339-71128b7bf8e7" name="Subject" assembly="Iphelion.Outline.Controls.dll" type="Iphelion.Outline.Controls.QuestionControls.ViewModels.ReferenceViewModel" order="5" active="true"'
+    new_subj = old_subj.replace('active="false"', 'active="true"')
     if old_subj in content:
         content = content.replace(old_subj, new_subj)
         changes.append("Enabled Subject question (active=false -> active=true)")
@@ -142,49 +188,68 @@ def fix_item2_xml(content):
     return content, changes
 
 
+def find_bighand_entry(zf):
+    """Find the customXml item that contains the BigHand/Outline config.
+    Returns (entry_name, raw_bytes) or (None, None).
+    """
+    candidates = sorted([n for n in zf.namelist() if re.match(r'customXml/item\d+\.xml$', n)])
+    for entry in candidates:
+        raw = zf.read(entry)
+        if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
+            try:
+                text = raw[2:].decode('utf-16-le' if raw[:2] == b'\xff\xfe' else 'utf-16-be')
+            except Exception:
+                continue
+            if '<template' in text[:200]:
+                return entry, raw
+        elif b'<template' in raw[:400]:
+            return entry, raw
+    return None, None
+
+
+def decode_content(raw):
+    """Decode raw bytes from a BigHand item XML to string."""
+    if raw[:2] == b'\xff\xfe':
+        return raw[2:].decode('utf-16-le')
+    elif raw[:2] == b'\xfe\xff':
+        return raw[2:].decode('utf-16-be')
+    else:
+        return raw.decode('utf-16-le', errors='replace')
+
+
 def process_file(file_path):
     """Process a single .dotx (or .zip) file. Returns True if changes were made."""
     print(f"\nProcessing: {os.path.basename(file_path)}")
 
-    # Find item2.xml in the zip
     try:
         with zipfile.ZipFile(file_path, 'r') as zf:
-            item2_entries = [n for n in zf.namelist() if 'customXml/item2.xml' in n]
-            if not item2_entries:
-                print("  SKIP: No customXml/item2.xml found")
+            entry_name, raw = find_bighand_entry(zf)
+            if entry_name is None:
+                print("  SKIP: No BigHand/Outline config found in any customXml item")
                 return False
-
-            item2_name = item2_entries[0]
-            raw = zf.read(item2_name)
+            print(f"  Config found in: {entry_name}")
     except (zipfile.BadZipFile, Exception) as e:
         print(f"  ERROR: Cannot read file: {e}")
         return False
 
-    # Decode UTF-16
-    try:
-        if raw[:2] == b'\xff\xfe':
-            content = raw[2:].decode('utf-16-le')
-        elif raw[:2] == b'\xfe\xff':
-            content = raw[2:].decode('utf-16-be')
-        else:
-            content = raw.decode('utf-16-le', errors='replace')
-    except Exception as e:
-        print(f"  ERROR: Cannot decode item2.xml: {e}")
-        return False
+    content = decode_content(raw)
 
-    # Check if this template needs fixing (has WorkSite refs OR has WorkSite field IDs)
+    # Check if this template needs fixing
     has_worksite = 'WorkSite' in content
-    has_ws_field_ids = any(ws_id in content for ws_id in FIELD_ID_REPLACEMENTS)
+    has_wrong_fields = bool(auto_detect_field_replacements(content))
 
-    if not has_worksite and not has_ws_field_ids:
+    if not has_worksite and not has_wrong_fields:
         if 'NetDocuments' in content:
             print("  SKIP: Already fully converted to NetDocuments")
         else:
-            print("  SKIP: No WorkSite or NetDocuments references found")
+            print("  SKIP: No WorkSite or wrong field IDs found")
         return False
 
+    if has_wrong_fields and not has_worksite:
+        print("  NOTE: DLLs already NetDocuments but field IDs still need fixing")
+
     # Apply fixes
-    fixed_content, changes = fix_item2_xml(content)
+    fixed_content, changes = fix_item_xml(content)
     if not fixed_content:
         print("  SKIP: No changes needed")
         return False
@@ -195,7 +260,7 @@ def process_file(file_path):
         shutil.copy2(file_path, backup_path)
         print(f"  Backup: {os.path.basename(backup_path)}")
 
-    # Repackage: read original zip, replace just item2.xml, write back
+    # Repackage
     with tempfile.NamedTemporaryFile(suffix=os.path.splitext(file_path)[1], delete=False) as tmp:
         tmp_path = tmp.name
 
@@ -203,7 +268,7 @@ def process_file(file_path):
         with zipfile.ZipFile(file_path, 'r') as zf_in:
             with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf_out:
                 for item in zf_in.infolist():
-                    if item.filename == item2_name:
+                    if item.filename == entry_name:
                         fixed_bytes = b'\xff\xfe' + fixed_content.encode('utf-16-le')
                         zf_out.writestr(item, fixed_bytes)
                     else:
@@ -216,19 +281,18 @@ def process_file(file_path):
             os.remove(tmp_path)
         return False
 
-    # Report changes
     for change in changes:
         print(f"  FIXED: {change}")
 
     # Verify
     with zipfile.ZipFile(file_path, 'r') as zf:
-        data = zf.read(item2_name)
+        data = zf.read(entry_name)
         text = data.decode('utf-16-le', errors='replace')
         ws_count = len(re.findall(r'WorkSite', text))
+        wrong_fields = len(auto_detect_field_replacements(text))
         nd_count = len(re.findall(r'NetDocuments', text))
-        ws_fields = sum(1 for ws_id in FIELD_ID_REPLACEMENTS if ws_id in text)
-        print(f"  Verify: WorkSite={ws_count}, NetDocuments={nd_count}, "
-              f"remaining_WS_fields={ws_fields}, checkForDocId={'checkForDocId' in text}")
+        print(f"  Verify: WorkSite={ws_count}, wrong_fields={wrong_fields}, "
+              f"NetDocuments={nd_count}, checkForDocId={'checkForDocId' in text}")
 
     return True
 
@@ -243,7 +307,6 @@ def main():
     total_count = 0
 
     if os.path.isdir(target):
-        # Process all .dotx files in directory
         files = sorted([
             os.path.join(target, f) for f in os.listdir(target)
             if f.endswith('.dotx')
